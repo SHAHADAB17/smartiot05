@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Notice Board</title>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database.js"></script>
+</head>
+<body>
+    <h1>Smart Notice Board</h1>
+    <textarea id="notice" placeholder="Enter Notice"></textarea>
+    <button onclick="sendNotice()">Send Notice</button>
+
+    <script>
+        // 🔥 Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyCMvUWFRSALobf8PdW1UkcNGsFCM6nVKsY",
+            authDomain: "smartiot05.firebaseapp.com",
+            databaseURL: "https://YOUR-FIREBASE-APP.firebaseio.com",
+            projectId: "smartiot05",
+            storageBucket: "smartiot05.firebasestorage.app",
+            messagingSenderId: "689419928515",
+            appId: "1:689419928515:web:e4bb9a80baa7918c6db376"
+        };
+
+        // 🔥 Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        function sendNotice() {
+            const notice = document.getElementById("notice").value;
+            db.ref("/notice").set(notice);
+            alert("Notice Sent!");
+        }
+    </script>
+</body>
+</html>
