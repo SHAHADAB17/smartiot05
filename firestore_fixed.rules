@@ -1,0 +1,175 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // IMPORTANT:
+    // Always check membership from the parent chat document.
+    // The previous rules incorrectly checked participants on the message
+    // document itself, which caused "Missing or insufficient permissions".
+    function chatMember(chatId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/chats/$(chatId))
+        && request.auth.uid in
+           get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    }
+
+    function userBlocked(userId) {
+      return signedIn()
+        && request.auth.uid in
+           get(/databases/$(database)/documents/users/$(userId))
+             .data.get("blockedUsers", []);
+    }
+
+    // =========================
+    // USERS
+    // =========================
+    match /users/{userId} {
+      allow get, list: if signedIn();
+
+      allow create: if signedIn()
+        && request.auth.uid == userId;
+
+      allow update: if signedIn()
+        && request.auth.uid == userId;
+
+      allow delete: if signedIn()
+        && request.auth.uid == userId;
+    }
+
+    // =========================
+    // DIRECT + GROUP CHATS
+    // =========================
+    match /chats/{chatId} {
+
+      allow get: if chatMember(chatId);
+
+      // Current user must be one of the participants.
+      allow create: if signedIn()
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() >= 2
+        && request.auth.uid in request.resource.data.participants;
+
+      // Existing participant can update chat metadata, but cannot replace
+      // the participant list through this rule.
+      allow update: if chatMember(chatId)
+        && request.resource.data.participants == resource.data.participants;
+
+      allow delete: if signedIn()
+        && resource.data.createdBy == request.auth.uid;
+
+      match /messages/{messageId} {
+
+        // FIX: check the parent chat, not the message's own data.
+        allow read: if chatMember(chatId);
+
+        allow create: if chatMember(chatId)
+          && request.resource.data.senderId == request.auth.uid;
+
+        allow update: if chatMember(chatId)
+          && request.resource.data.senderId == resource.data.senderId;
+
+        allow delete: if chatMember(chatId)
+          && resource.data.senderId == request.auth.uid;
+      }
+    }
+
+    // =========================
+    // GROUP INDEX
+    // =========================
+    match /groupIndex/{groupId} {
+      allow get, list: if signedIn()
+        && resource.data.participants is list
+        && request.auth.uid in resource.data.participants;
+
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.participants is list
+        && request.auth.uid in request.resource.data.participants;
+
+      allow update: if signedIn()
+        && resource.data.participants is list
+        && request.auth.uid in resource.data.participants;
+
+      allow delete: if signedIn()
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    // =========================
+    // REPORT USER
+    // =========================
+    match /reports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.reportedUserId is string
+        && request.resource.data.reason is string;
+
+      allow get: if signedIn()
+        && resource.data.reporterId == request.auth.uid;
+
+      allow list: if false;
+
+      allow update, delete: if signedIn()
+        && resource.data.reporterId == request.auth.uid;
+    }
+
+    // =========================
+    // VOICE / VIDEO CALL SIGNALING
+    // =========================
+    match /calls/{callId} {
+
+      allow create: if signedIn()
+        && request.resource.data.callerId == request.auth.uid
+        && request.resource.data.calleeId is string
+        && request.resource.data.callerId != request.resource.data.calleeId
+        && request.resource.data.status == "ringing"
+        && request.resource.data.type in ["voice", "video"]
+        && !userBlocked(request.resource.data.calleeId);
+
+      allow get: if signedIn()
+        && (
+          resource.data.callerId == request.auth.uid
+          || resource.data.calleeId == request.auth.uid
+        );
+
+      // Supports incoming-call queries filtered by calleeId.
+      allow list: if signedIn()
+        && resource.data.calleeId == request.auth.uid;
+
+      allow update: if signedIn()
+        && (
+          resource.data.callerId == request.auth.uid
+          || resource.data.calleeId == request.auth.uid
+        )
+        && request.resource.data.callerId == resource.data.callerId
+        && request.resource.data.calleeId == resource.data.calleeId
+        && request.resource.data.type == resource.data.type;
+
+      allow delete: if signedIn()
+        && (
+          resource.data.callerId == request.auth.uid
+          || resource.data.calleeId == request.auth.uid
+        );
+
+      match /{candidateCollection}/{candidateId} {
+        allow read, create: if signedIn()
+          && exists(/databases/$(database)/documents/calls/$(callId))
+          && (
+            get(/databases/$(database)/documents/calls/$(callId)).data.callerId == request.auth.uid
+            || get(/databases/$(database)/documents/calls/$(callId)).data.calleeId == request.auth.uid
+          );
+      }
+    }
+
+    // =========================
+    // DEFAULT DENY
+    // =========================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
