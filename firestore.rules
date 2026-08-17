@@ -1,0 +1,144 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isParticipantFromResource() {
+      return signedIn()
+        && resource.data.participants is list
+        && request.auth.uid in resource.data.participants;
+    }
+
+    // =========================
+    // USERS
+    // =========================
+    match /users/{userId} {
+      allow get, list: if signedIn();
+      allow create: if signedIn() && request.auth.uid == userId;
+      allow update: if signedIn() && request.auth.uid == userId;
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    // =========================
+    // DIRECT + GROUP CHATS
+    // =========================
+    match /chats/{chatId} {
+
+      allow get: if isParticipantFromResource();
+
+      allow create: if signedIn()
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() >= 2
+        && request.auth.uid in request.resource.data.participants;
+
+      allow update: if isParticipantFromResource()
+        && request.resource.data.participants == resource.data.participants;
+
+      allow delete: if signedIn()
+        && resource.data.createdBy == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow read: if isParticipantFromResource();
+
+        allow create: if isParticipantFromResource()
+          && request.resource.data.senderId == request.auth.uid;
+
+        allow update: if isParticipantFromResource()
+          && (
+            request.resource.data.senderId == resource.data.senderId
+            || (
+              request.resource.data.senderId == resource.data.senderId
+              && request.resource.data.seen == true
+            )
+            || (
+              request.resource.data.senderId == resource.data.senderId
+              && request.resource.data.delivered == true
+            )
+          );
+
+        allow delete: if isParticipantFromResource()
+          && resource.data.senderId == request.auth.uid;
+      }
+    }
+
+    // =========================
+    // GROUP INDEX
+    // =========================
+    match /groupIndex/{groupId} {
+      allow get, list: if signedIn()
+        && resource.data.participants is list
+        && request.auth.uid in resource.data.participants;
+
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.participants is list
+        && request.auth.uid in request.resource.data.participants;
+
+      allow update: if signedIn()
+        && resource.data.participants is list
+        && request.auth.uid in resource.data.participants;
+
+      allow delete: if signedIn()
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    // =========================
+    // STEP 10 — VOICE / VIDEO CALLS
+    // WebRTC uses Firestore only for signaling.
+    // =========================
+    match /calls/{callId} {
+
+      // Caller creates a new call.
+      allow create: if signedIn()
+        && request.resource.data.callerId == request.auth.uid
+        && request.resource.data.calleeId is string
+        && request.resource.data.callerId != request.resource.data.calleeId
+        && request.resource.data.status == "ringing"
+        && request.resource.data.type in ["voice", "video"];
+
+      // Only caller/callee can see their call.
+      allow get: if signedIn()
+        && (
+          resource.data.callerId == request.auth.uid
+          || resource.data.calleeId == request.auth.uid
+        );
+
+      // Incoming-call query:
+      // where("calleeId","==",currentUser.uid)
+      // where("status","==","ringing")
+      allow list: if signedIn()
+        && resource.data.calleeId == request.auth.uid;
+
+      // Either participant can change call status/signaling.
+      // This is required for accept, reject and end-call.
+      allow update: if signedIn()
+        && (
+          resource.data.callerId == request.auth.uid
+          || resource.data.calleeId == request.auth.uid
+        )
+        && request.resource.data.callerId == resource.data.callerId
+        && request.resource.data.calleeId == resource.data.calleeId
+        && request.resource.data.type == resource.data.type;
+
+      // Either participant can remove the signaling document.
+      allow delete: if signedIn()
+        && (
+          resource.data.callerId == request.auth.uid
+          || resource.data.calleeId == request.auth.uid
+        );
+
+      // WebRTC ICE candidates.
+      match /{candidateCollection}/{candidateId} {
+        allow read, create: if signedIn()
+          && (
+            get(/databases/$(database)/documents/calls/$(callId)).data.callerId == request.auth.uid
+            || get(/databases/$(database)/documents/calls/$(callId)).data.calleeId == request.auth.uid
+          );
+      }
+    }
+  }
+}
